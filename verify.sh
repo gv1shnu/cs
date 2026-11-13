@@ -23,7 +23,9 @@ note() { echo "FAIL[$1] $2" >> "$FAILLOG"; }
 shell() { perl -0pe 's/[A-Za-z0-9+\/=]{200,}/ /g' "$1"; }
 
 # --- 1. Only *.html or .nojekyll may exist. ---
-find "$DIR" -type f ! -name '*.html' ! -name '.nojekyll' > "$TMP/other" || true
+find "$DIR" -type f ! -name '*.html' ! -name '.nojekyll' \
+  ! -path "$DIR/sw.js" ! -path "$DIR/manifest.webmanifest" \
+  ! -path "$DIR/icon-180.png" ! -path "$DIR/icon-512.png" > "$TMP/other" || true
 if [ -s "$TMP/other" ]; then
   note 1 "non-HTML files present in docs/ ($(wc -l < "$TMP/other" | tr -d ' ')):"
   sed 's/^/        /' "$TMP/other" >> "$FAILLOG"
@@ -62,6 +64,17 @@ while IFS= read -r -d '' f; do
   grep -qE  "$KEYHDR" "$TMP/sh" && note 5 "private key header in cleartext: $rel"
   grep -qiE "$CRED"   "$TMP/sh" && note 5 "credential assignment in cleartext: $rel"
 done < "$TMP/html0"
+
+# --- 6. Offline-app files: sw.js may list only .html page paths; no secrets. ---
+if [ -f "$DIR/sw.js" ]; then
+  grep -qiE "$FRAGMENTS" "$DIR/sw.js" && note 6 "source fragment in sw.js"
+  grep -qE "$EMAIL" "$DIR/sw.js" && note 6 "email in sw.js"
+  perl -ne 'if(/^const FILES = (\[.*\]);$/){for(/"([^"]*)"/g){print "$_\n" unless /^[A-Za-z0-9_\/.-]+\.html$/}}' "$DIR/sw.js" > "$TMP/swbad"
+  [ -s "$TMP/swbad" ] && note 6 "sw.js lists a non-page path"
+fi
+if [ -f "$DIR/manifest.webmanifest" ]; then
+  grep -qE "$EMAIL" "$DIR/manifest.webmanifest" && note 6 "email in manifest"
+fi
 
 if [ -s "$FAILLOG" ]; then
   cat "$FAILLOG"

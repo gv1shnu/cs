@@ -71,6 +71,7 @@ rsync -a \
   --exclude 'strip-residue.js' \
   --exclude 'inline-assets.js' \
   --exclude 'sessionize-staticrypt.js' \
+  --exclude 'pwa.js' \
   --exclude 'package.json' \
   --exclude 'package-lock.json' \
   --exclude 'README.md' \
@@ -107,6 +108,10 @@ node "$ROOT/strip-residue.js" "$STAGE"
 # so staticrypt encrypts 100% of the site's real content.
 node "$ROOT/inline-assets.js" "$STAGE"
 
+# Home-screen app tags on every page, and the "Save offline" button on the home
+# page. Done before encryption, so the button ships encrypted with the content.
+node "$ROOT/pwa.js" stage "$STAGE"
+
 # Encrypt. staticrypt reads the fixed salt from .staticrypt.json and the password
 # from $STATICRYPT_PASSWORD. Output nests under the input basename ("site").
 cd "$ROOT"
@@ -122,6 +127,10 @@ npx --yes staticrypt@3 .enc-build/site -r -d .enc-build/out \
 # password wrapper to sessionStorage, make session unlock unconditional, and drop
 # the (now redundant) checkbox from the prompt.
 node "$ROOT/sessionize-staticrypt.js" "$ENCOUT"
+
+# Offline layer: service worker + manifest + icons at the site root, and the
+# home-screen tags on each password prompt. The cache only ever holds ciphertext.
+node "$ROOT/pwa.js" out "$ENCOUT"
 
 # Replace docs/ with the freshly encrypted site (--delete prunes stale pages).
 mkdir -p "$PUBLISH"
