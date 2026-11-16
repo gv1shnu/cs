@@ -65,20 +65,39 @@ function addHead(file) {
 const UI = `<!--pwa-ui--><div id="pwa-offline" style="position:fixed;right:12px;bottom:12px;z-index:99999;display:none;font:13px/1.3 -apple-system,system-ui,sans-serif">
 <button type="button" style="border:0;border-radius:999px;padding:9px 14px;background:#1d2a44;color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.3);cursor:pointer"></button></div>
 <script>(function(){
+// The download runs here, in the page, not in the service worker: iOS stops
+// long-running service-worker work, so a 100 MB save started there can die
+// silently. Keep this page open until it says "Saved".
 if(!('serviceWorker' in navigator)||!('caches' in window))return;
-var box=document.getElementById('pwa-offline'),btn=box.querySelector('button'),busy=false;
+var box=document.getElementById('pwa-offline'),btn=box.querySelector('button'),busy=false,CACHE='notes-offline',META='__offline_meta__';
 function say(t){btn.textContent=t;box.style.display='block';}
-function send(m){navigator.serviceWorker.ready.then(function(r){(navigator.serviceWorker.controller||r.active).postMessage(m);});}
-navigator.serviceWorker.addEventListener('message',function(e){var d=e.data||{};
- if(d.type==='status'){busy=d.busy;
-   if(d.busy)say('Saving offline… '+d.done+'/'+d.total);
-   else if(d.complete&&d.current)say('✓ Saved offline · '+new Date(d.date).toLocaleDateString());
-   else if(d.complete)say('⟳ Update offline copy');
-   else say('⬇ Save all notes offline');}
- if(d.type==='progress'){busy=true;say('Saving offline… '+d.done+'/'+d.total);}
- if(d.type==='done'){busy=false;say(d.fail?'Saved, '+d.fail+' failed · tap to retry':'✓ Saved offline · all '+d.total+' pages');}});
-btn.onclick=function(){if(busy)return;if(!navigator.onLine){say('Offline now · connect to save');return;}busy=true;say('Starting…');send({type:'sync'});};
-send({type:'status'});
+function base(){return new URL('./',location.href).href;}
+function list(){return fetch(base()+'sw.js',{cache:'no-cache'}).then(function(r){return r.text();}).then(function(t){return {v:JSON.parse(/const VERSION = (".*?");/.exec(t)[1]),files:JSON.parse(/const FILES = (\\[.*\\]);/.exec(t)[1])};});}
+function meta(c){return c.match(base()+META).then(function(r){return r?r.json():{};});}
+function status(){caches.open(CACHE).then(function(c){return meta(c).then(function(m){
+  if(!navigator.onLine){say(m.complete?'✓ Saved offline':'Offline · not saved yet');return;}
+  return list().then(function(L){
+    if(m.complete&&m.version===L.v)say('✓ Saved offline · '+new Date(m.date).toLocaleDateString());
+    else if(m.complete)say('⟳ Update offline copy');
+    else if(m.version===L.v)say('⬇ Resume saving offline');
+    else say('⬇ Save all notes offline');});});}).catch(function(){say('⬇ Save all notes offline');});}
+function sync(){busy=true;say('Starting…');
+  Promise.all([caches.open(CACHE),list()]).then(function(x){var c=x[0],L=x[1],B=base(),files=L.files,i=0,done=0,fail=0;
+    return meta(c).then(function(m){var resume=m.version===L.v;
+      return c.put(B+META,new Response(JSON.stringify({version:L.v,complete:false,date:Date.now()}))).then(function(){
+        function next(){if(i>=files.length)return Promise.resolve();var u=new URL(files[i++],B).href;
+          return (resume?c.match(u):Promise.resolve(null)).then(function(hit){if(hit)return;
+            return fetch(u,{cache:'no-cache'}).then(function(r){if(r.ok)return c.put(u,r);fail++;});})
+          .catch(function(){fail++;}).then(function(){done++;if(done%5===0||done===files.length)say('Saving offline… '+done+'/'+files.length+' · keep open');return next();});}
+        return Promise.all([next(),next(),next(),next(),next(),next()]).then(function(){
+          return fetch(B,{cache:'no-cache'}).then(function(r){if(r.ok)return c.put(B,r);}).catch(function(){});}).then(function(){
+          var keep={};files.forEach(function(f){keep[new URL(f,B).href]=1;});keep[B]=1;keep[B+META]=1;
+          return (fail?Promise.resolve():c.keys().then(function(ks){return Promise.all(ks.map(function(k){if(!keep[k.url.split('?')[0]])return c.delete(k);}));})).then(function(){
+            return c.put(B+META,new Response(JSON.stringify({version:L.v,complete:!fail,date:Date.now()})));});}).then(function(){
+          busy=false;say(fail?'Saved, '+fail+' failed · tap to retry':'✓ Saved offline · all '+files.length+' pages');});});});})
+  .catch(function(){busy=false;say('Save failed · tap to retry');});}
+btn.onclick=function(){if(busy)return;if(!navigator.onLine){say('Offline now · connect to save');return;}sync();};
+navigator.serviceWorker.ready.then(status);
 })();</script><!--/pwa-ui-->`;
 
 if (mode === "stage") {
